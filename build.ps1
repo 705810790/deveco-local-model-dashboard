@@ -1,4 +1,4 @@
-param(
+﻿param(
     [switch]$debug,
     [switch]$clean,
     [switch]$check,
@@ -6,6 +6,10 @@ param(
     [switch]$h,
     [switch]$help
 )
+
+# 确保中文输出不乱码（PS 5.1 默认按 ANSI 读无 BOM 的 UTF-8 文件）
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding = [System.Text.Encoding]::UTF8
 
 if ($h -or $help) {
     Write-Host "deveco-local-model-dashboard 构建脚本" -ForegroundColor Cyan

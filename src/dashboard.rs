@@ -5,7 +5,8 @@
 
 /// 生成完整 HTML 仪表板页面。与 TS renderDashboard() 完全一致。
 pub fn render_dashboard(port: u16, host: &str) -> String {
-    let page_version = "V2.0";
+    // 版本号由 build.rs 从根目录 VERSION 文件注入，改版本只需改 VERSION 文件。
+    let page_version = concat!("V", env!("APP_VERSION"));
     format!(r##"<!doctype html>
 <html lang="zh-CN">
 <head>

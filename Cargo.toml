@@ -1,0 +1,63 @@
+[package]
+name = "deveco-local-model-dashboard"
+version = "1.0.0"
+edition = "2021"
+license = "MIT"
+description = "Local model relay proxy for DevEco CodeGenie (Huawei) — Rust rewrite of deveco-local-model-dashboard"
+
+[[bin]]
+name = "deveco-local-model-dashboard"
+path = "src/main.rs"
+
+[dependencies]
+# Web server
+axum = { version = "0.7", features = ["macros"] }
+tokio = { version = "1", features = ["full"] }
+tower-http = { version = "0.5", features = ["cors"] }
+hyper = { version = "1", features = ["full"] }
+
+# HTTP client
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+bytes = "1"
+
+# Async
+futures = "0.3"
+async-trait = "0.1"
+tokio-stream = "0.1"
+
+# Utils
+anyhow = "1"
+thiserror = "2"
+uuid = { version = "1", features = ["v4"] }
+base64 = "0.22"
+dirs = "6"
+url = "2"
+urlencoding = "2"
+rand = "0.8"
+sha2 = "0.10"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+open = "5"
+encoding_rs = "0.8"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+[target.'cfg(windows)'.dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["json", "native-tls", "stream"] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "unwind"
+
+[dev-dependencies]
+tempfile = "3"

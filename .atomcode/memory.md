@@ -1,0 +1,2 @@
+- deveco-local-model-dashboard 必须跨平台: Windows + Linux + macOS。所有平台相关功能（autostart、防火墙、TLS）必须用 cfg(windows)/cfg(unix) 分支，非 Windows 平台要有合理 fallback。
+- Rust 工具链路径: E:\AI agent\atomcode-deveco\.rustup\toolchains\stable-x86_64-pc-windows-msvc\bin\，cargo.exe 和 rustc.exe 都在此目录。编译时需将该目录加入 PATH。

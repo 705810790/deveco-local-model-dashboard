@@ -1061,16 +1061,25 @@ pub async fn probe_model(state: ProxyState, req: Request) -> Response {
 
     match stream_result {
         Ok(Ok(resp)) if resp.status().is_success() => {
-            // Read first byte to confirm
-            let _ = resp.bytes().await;
+            // Read full body — SSE streams always return HTTP 200, so we
+            // must inspect the content to distinguish a real response from
+            // a WaitingInLine queue rejection (which also comes back as 200).
+            let body = resp.bytes().await.unwrap_or_default();
             let latency = started.elapsed().as_millis() as u64;
             state
                 .exit_queue(&probe_key, &probe_chat_id, &model, &access_token)
                 .await;
-            server::json_response(
-                StatusCode::OK,
-                &serde_json::json!({"ok": true, "model": model, "channel": "maas HTTP", "latency_ms": latency}),
-            )
+            if is_queue_rejection(&body) {
+                server::json_response(
+                    StatusCode::OK,
+                    &serde_json::json!({"ok": false, "model": model, "channel": "maas HTTP", "latency_ms": latency, "error": {"message": "模型正在排队中（WaitingInLine），暂不可用", "type": "queue_rejection"}}),
+                )
+            } else {
+                server::json_response(
+                    StatusCode::OK,
+                    &serde_json::json!({"ok": true, "model": model, "channel": "maas HTTP", "latency_ms": latency}),
+                )
+            }
         }
         Ok(Ok(_)) | Ok(Err(_)) => {
             // Stream failed (not timeout) → fall back to no-stream

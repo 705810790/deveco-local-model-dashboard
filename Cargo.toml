@@ -1,6 +1,6 @@
 [package]
 name = "deveco-local-model-dashboard"
-version = "2.0.2"
+version = "2.0.3"
 edition = "2021"
 license = "MIT"
 description = "Local model relay proxy for DevEco CodeGenie (Huawei) — Rust rewrite of deveco-local-model-dashboard"
@@ -17,7 +17,7 @@ tower-http = { version = "0.5", features = ["cors"] }
 hyper = { version = "1", features = ["full"] }
 
 # HTTP client
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream", "http2"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
@@ -50,7 +50,7 @@ encoding_rs = "0.8"
 clap = { version = "4", features = ["derive"] }
 
 [target.'cfg(windows)'.dependencies]
-reqwest = { version = "0.12", default-features = false, features = ["json", "native-tls", "stream"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "native-tls", "stream", "http2"] }
 
 [profile.release]
 opt-level = "z"

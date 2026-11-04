@@ -371,4 +371,86 @@ default→ {}
 - `cargo check`: 0 errors, 35 warnings（均为 pre-existing）
 - `cargo test`: 37 passed, 0 failed
 
+---
+
+# 🔴 重大发现：上游排队根因 —— `lang` 头分池（2026-11-04）
+
+> **【重点】"原生应用秒回 vs 代理排队"的根因已实锤：上游按 `lang` 头分池/路由，
+> `lang: en` 走排队的池，`lang: cn` 走畅通的池。代理此前硬编码 `lang: en`，
+> 对齐为 `cn` 后 glm-5.2 由"60 秒仍在 position 3"变为 **1.18 秒直接响应**。**
+
+## 一、抓包实证方法（重定向法，已封装可复用）
+
+1. 修改**真实运行时**插件 jar 内 `env_common.properties`（注意路径，见下方路径警示）：
+   - `deveco.chat.maas.streaming.url` → `http://127.0.0.1:666/v2`
+   - `deveco.chat.maas.nostreaming.url` → `http://127.0.0.1:666/v2`
+2. 完全重启 DevEco Studio → CodeGenie 发消息 → 原生请求明文进入代理被捕获
+3. 代理侧捕获基础设施（已固化在代码中，无需再改插件）：
+   - 开关：环境变量 `DEVECO_CAPTURE_DIR`（指向目录即启用）
+   - 产物：`captures/in-*.json`（客户端/原生请求）、`captures/out-*.json`（代理发上游请求）
+   - 实现：`config.rs::capture_request()` + `forward.rs` 三个转发函数入口
+4. 抓完用备份还原 jar 并再次重启 IDE
+
+> **⚠️ 路径警示（曾踩坑）**：真实运行时插件在
+> `C:\Users\<user>\AppData\Roaming\Huawei\DevEcoStudio6.1\plugins\codegenie-plugin\`
+> （jar 名 `instrumented-codegenie-common-0.0.0.1-SNAPSHOT.jar`）；
+> `E:\DevEco Studio\plugins\codegenie-plugin\`（6.1.1.300 jar）与
+> `E:\AI agent\codegenie-plugin\` 都只是代码参考/分析副本，IDE **不加载**。
+> 另：`deveco` 开头的进程是另一个应用（DevEco Code），与 DevEco Studio 无关，勿误杀。
+
+## 二、抓包对比结果（captures/，2026-11-04 17:20 & 17:27 两轮）
+
+### 结论一：原生与代理同通道、同 body
+- 端点一致：`POST https://cn.devecostudio.huawei.com/sse/codeGenie/maas/v2/chat/completions`
+  （原生 = langchain4j `InnerClient` 读 `env_common.properties` 的
+  `deveco.chat.maas.streaming.url`，与代理 `config.rs::DEVECO_API_BASE` 相同）
+- body 逐字段一致：messages(2)/tools(12)/`parallel_tool_calls:false`/
+  `stream_options:{include_usage:true}`/`temperature:0.5`/
+  `thinking:{type:"enabled"}`/`tool_choice:"auto"`/`top_p:1.0` —— 代理转换层透传无损
+
+### 结论二：差异全在 headers（修复前）
+
+| Header | 原生插件 | 代理（修复前） | 修复后 |
+|---|---|---|---|
+| **`lang`** | **`cn`** | ❌ `en` | ✅ `cn` |
+| `user-agent` | `langchain4j-openai` | ❌ Chrome UA | ✅ `langchain4j-openai` |
+| `session-id` | 不发 | ❌ 发 | ✅ 不发 |
+| `accept-language` | 不发 | ❌ 发 `zh-CN` | ✅ 不发 |
+| `authorization` | `Bearer DgEA…`（IDE token） | `Bearer DgEA…`（代理 token，同账号同格式） | 同左（预期差异） |
+| `chat-id` | 32 hex（会话内稳定） | 32 hex（会话键哈希映射） | 同左（预期差异） |
+
+原生实际发送的完整业务头仅 5 个：`authorization` / `chat-id` / `content-type` /
+`lang` / `user-agent`（其余 connection/host/http2-settings/upgrade 为 JDK
+HttpClient 的 HTTP/2 传输层协商头，非业务头）。
+
+### 结论三：原生也排队，但通道无优先级差异
+原生插件含 `ErrorType.WAITING_IN_LINE("WaitingInLine")` 与
+`Notification$FuncType.QUEUE`——原生收到排队事件渲染为 UI"排队中"，体感被无感化；
+通道本身与代理完全一致，**不存在 WS 优先通道**（WSS 仅用于补全/专用功能/本地转发）。
+
+## 三、修复：`upstream_headers()` 1:1 复刻原生
+
+**文件**: `src/proxy/server.rs` → `upstream_headers()`
+
+- `lang`: `en` → `cn`（**根因修复**）
+- `user-agent`: Chrome → `langchain4j-openai`
+- 删除 `Session-Id`、`accept-language` 两个多余头
+- 保留 `Authorization Bearer` + `Content-Type` + `Chat-Id`（与原生一致）
+- 签名保留 `_session_id` 参数以兼容调用点（有意不发，对齐原生）
+
+## 四、验证（决定性）
+
+| 项 | 修复前 | 修复后 |
+|---|---|---|
+| glm-5.2 探测 | 60s 后仍在排队（position 22→3） | **ok=true，1183ms 直接回复** |
+| headers 对比 | 4 处差异 | 与原生业务头完全一致（in/out 抓包 diff） |
+| `cargo test` | — | 50 passed, 0 failed |
+
+> **注意**：上游 `lang` 分池行为的副作用——若今后 `cn` 池也拥挤，属正常排队；
+> 排队处理（过滤+保位重试，见 queue.rs）仍然必要且已生效。
+
+## 五、相关文档
+
+- `原生请求报文对齐.md`：原生报文完整结构、复刻位置、残余差异、再抓包操作手册
+- `captures/`：两轮抓包实证（in-*.json = 原生请求，out-*.json = 代理上游请求）
 

@@ -325,6 +325,59 @@ pub fn log_error(msg: &str) {
 }
 
 // ---------------------------------------------------------------------------
+// Request capture (DEVECO_CAPTURE_DIR)
+// ---------------------------------------------------------------------------
+
+static CAPTURE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Dump a full request (method/uri/headers/body) to `$DEVECO_CAPTURE_DIR` when set.
+///
+/// `kind` distinguishes inbound client requests ("in") from outbound upstream
+/// requests ("out"). No-op when the env var is unset/empty. Best-effort:
+/// write failures are logged and never fatal. Bodies are stored verbatim
+/// (parsed as JSON when possible, raw string otherwise) — headers are NOT
+/// redacted, since the purpose is byte-level comparison of native vs proxy
+/// requests (including Authorization format).
+pub fn capture_request(
+    kind: &str,
+    method: &str,
+    uri: &str,
+    headers: &[(String, String)],
+    body: &str,
+) {
+    let dir = match std::env::var("DEVECO_CAPTURE_DIR") {
+        Ok(d) if !d.is_empty() => d,
+        _ => return,
+    };
+    let dir = std::path::PathBuf::from(&dir);
+    if std::fs::create_dir_all(&dir).is_err() {
+        log_warn("capture: cannot create DEVECO_CAPTURE_DIR");
+        return;
+    }
+    let seq = CAPTURE_SEQ.fetch_add(1, Ordering::Relaxed);
+    let ts = chrono::Local::now();
+    let fname = format!("{}-{}-{:04}.json", kind, ts.format("%Y%m%d-%H%M%S%.3f"), seq);
+    let headers_map: serde_json::Map<String, serde_json::Value> = headers
+        .iter()
+        .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+        .collect();
+    let body_val: serde_json::Value = serde_json::from_str(body)
+        .unwrap_or(serde_json::Value::String(body.to_string()));
+    let doc = serde_json::json!({
+        "kind": kind,
+        "timestamp": ts.format("%Y-%m-%dT%H:%M:%S%.3f%:z").to_string(),
+        "method": method,
+        "uri": uri,
+        "headers": serde_json::Value::Object(headers_map),
+        "body": body_val,
+    });
+    let path = dir.join(fname);
+    if let Err(e) = std::fs::write(&path, serde_json::to_string_pretty(&doc).unwrap_or_default()) {
+        log_warn(&format!("capture write failed: {e}"));
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Upstream URL helpers
 // ---------------------------------------------------------------------------
 

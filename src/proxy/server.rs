@@ -892,21 +892,23 @@ pub fn machine_control_gate(state: &ProxyState, addr: SocketAddr) -> bool {
     addr.ip().is_loopback()
 }
 
-/// Build upstream headers for DevEco API.
-pub fn upstream_headers(access_token: &str, chat_id: &str, session_id: &str) -> HeaderMap {
+/// Build upstream headers for DevEco API — 1:1 replica of the native CodeGenie
+/// plugin's headers (verified against a captured native request, see
+/// `原生请求报文对齐.md`). The native plugin (langchain4j InnerClient) sends
+/// exactly: authorization / chat-id / content-type / lang / user-agent, and
+/// does NOT send session-id or accept-language.
+///
+/// `_session_id` is kept in the signature for call-site compatibility but is
+/// intentionally not sent upstream, mirroring the native behavior.
+pub fn upstream_headers(access_token: &str, chat_id: &str, _session_id: &str) -> HeaderMap {
     let mut headers = HeaderMap::new();
     headers.insert(
         "Authorization",
         HeaderValue::from_str(&format!("Bearer {access_token}")).unwrap(),
     );
     headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
-    headers.insert("lang", HeaderValue::from_static("en"));
+    headers.insert("lang", HeaderValue::from_static("cn"));
     headers.insert("Chat-Id", HeaderValue::from_str(chat_id).unwrap_or(HeaderValue::from_static("")));
-    headers.insert("Session-Id", HeaderValue::from_str(session_id).unwrap_or(HeaderValue::from_static("")));
-    headers.insert(
-        "User-Agent",
-        HeaderValue::from_static("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"),
-    );
-    headers.insert("accept-language", HeaderValue::from_static("zh-CN"));
+    headers.insert("User-Agent", HeaderValue::from_static("langchain4j-openai"));
     headers
 }

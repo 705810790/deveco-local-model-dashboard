@@ -114,7 +114,18 @@ model = "glm-5.2"
 | `DEVECO_LOG_LEVEL` | info | 日志级别（debug/info/warn/error） |
 | `DEVECO_VISION_MODEL` | Qwen3_VL_235B… | Vision fallback 模型 |
 | `DEVECO_TEXT_ONLY_MODELS` | GLM-5.1 | 纯文本模型（逗号分隔） |
+| `DEVECO_QUEUE_RETRIES` | 30 | 上游排队（WaitingInLine）连接断开后未获服务时的自动重试次数（上限 60；重试保留排队位，繁忙队列约 2s/位） |
+| `DEVECO_QUEUE_RETRY_DELAY_MS` | 2000 | 排队重试间隔毫秒数（1–600000） |
 | `OPENCODE_CONFIG_DIR` | ~/.config/opencode | 配置目录 |
+
+### 排队（WaitingInLine）处理
+
+上游模型繁忙时会通过 SSE 事件 `data: {"type":"WaitingInLine",...}` 告知请求正在排队。代理会：
+
+- **吞掉排队事件**，不透传给客户端（避免破坏外接工具的 SSE 解析），期间持续发送心跳保活；
+- 排队期间**留在队中等待**；若队列连接被上游关闭且始终未获服务，自动重新请求（最多 `DEVECO_QUEUE_RETRIES` 次，间隔 `DEVECO_QUEUE_RETRY_DELAY_MS`）；
+- 重试耗尽仍在排队 → 返回 503 与干净的错误信息，且不调用 exitSessionQueue（会话可能仍持有排队位）；
+- 一旦收到真实模型数据，正常透传并按原有逻辑收尾。
 
 ### Token 存储路径
 

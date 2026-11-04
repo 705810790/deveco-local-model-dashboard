@@ -131,7 +131,7 @@ pub fn render_dashboard(port: u16, host: &str) -> String {
       <tbody id="model-rows"><tr><td colspan="5" style="color:#8a97ab">加载中…</td></tr></tbody>
     </table>
     <div style="display:flex;justify-content:flex-end;margin-top:12px"><button class="btn" id="probe-all-btn" onclick="probeAll(this)">一键测速全部模型</button></div>
-    <div class="hint">"测试"会发送一个极小的请求（思考关闭、max_tokens=8，仅验证连通性与首字节延迟）：先探测流式通道，无响应时自动改走非流式通道，任一通道应答即视为在线。<b>上游排队时探测可能等待几十秒（最长约 60s）</b>，期间徽标会跳动计时——排队结束即返回在线，属正常现象。新上线的远端模型会自动出现在这里（模型列表每小时向上游刷新一次）。</div>
+    <div class="hint">"测试"会发送一个极小的请求（思考关闭、max_tokens=8，仅验证连通性与首字节延迟）：先探测流式通道，无响应时自动改走非流式通道，任一通道应答即视为在线。<b>上游排队时探测可能等待几十秒（最长约 60s）</b>，期间徽标会跳动计时——排队结束即返回在线，属正常现象。连续快速测试可能触发上游「新会话请求频率超限」（UserSessionLimitExceeded），此时会如实显示为失败，稍候再试即可。<b>悬停结果徽标（或其 ⓘ）可查看模型实际回复内容 / 错误详情</b>。新上线的远端模型会自动出现在这里（模型列表每小时向上游刷新一次）。</div>
   </section>
 
   <section>
@@ -433,16 +433,20 @@ function fillModelSelect(sel, ids) {{
   if (prev && ids.indexOf(prev) >= 0) sel.value = prev;
 }}
 
+function escAttr(s) {{
+  return String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/\n/g, " ");
+}}
 function badgeHtml(result) {{
   if (!result) return '<span class="badge untested">未测试</span>';
   if (result.status === "up") {{
-    const tail = result.tail || "";
-    return '<span class="badge up">在线 ✅ <span class="lat">' + result.ms + "ms" +
-      (tail ? " · \u201c" + tail + "\u201d" : "") + '</span></span>';
+    const tip = escAttr(result.detail || "");
+    return '<span class="badge up"' + (tip ? ' title="模型回复：' + tip + '"' : "") + '>在线 ✅ <span class="lat">' + result.ms + "ms" +
+      (tip ? ' <span class="lat">ⓘ</span>' : "") + '</span></span>';
   }}
   if (result.status === "down") {{
-    return '<span class="badge down">失败 ❌ <span class="lat">' + result.ms + "ms</span>" +
-      (result.err ? '<span class="lat" title="' + result.err + '"> ⓘ</span>' : "") + '</span>';
+    const tip = escAttr(result.err || "");
+    return '<span class="badge down"' + (tip ? ' title="' + tip + '"' : "") + '>失败 ❌ <span class="lat">' + result.ms + "ms</span>" +
+      (tip ? ' <span class="lat">ⓘ</span>' : "") + '</span>';
   }}
   return '<span class="badge untested">测试中…</span>';
 }}
@@ -519,7 +523,7 @@ async function probe(idx, id) {{
       return;
     }}
     const ms = typeof j.latency_ms === "number" ? j.latency_ms : Math.round(performance.now() - t0);
-    setProbeState(id, {{ status: "up", ms }});
+    setProbeState(id, {{ status: "up", ms, detail: typeof j.detail === "string" ? j.detail : "" }});
   }} catch (e) {{
     const err = e.name === "AbortError" || e.name === "TimeoutError"
       ? "等待超时（约 70s）——上游排队过久或不可达"

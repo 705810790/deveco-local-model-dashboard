@@ -55,7 +55,9 @@ Set-Location $repo
 $profileName = if ($debug) { "debug" } else { "release" }
 $targetDir   = Join-Path $repo "target"
 $profileDir  = Join-Path $targetDir $profileName
-$binName     = if ($IsWindows) { "deveco-local-model-dashboard.exe" } else { "deveco-local-model-dashboard" }
+# $env:OS 在 PS 5.1 与 pwsh 7 下均存在且可靠；不要用 $IsWindows（PS 5.1 无此自动变量，
+# build.cmd 经 System32 powershell.exe 调用时 binName 会丢失 .exe 后缀导致 Copy-Item 失败）
+$binName = if ($env:OS -eq "Windows_NT") { "deveco-local-model-dashboard.exe" } else { "deveco-local-model-dashboard" }
 $binPath     = Join-Path $profileDir $binName
 
 # ── 清除 ──

@@ -185,6 +185,26 @@ pub fn extra_maas_models() -> std::collections::BTreeMap<String, ModelInfo> {
             ..Default::default()
         },
     );
+    for id in ["deepseek-v4.1-flash", "deepseek-v4.1-flash-1017"] {
+        m.insert(
+            id.to_string(),
+            ModelInfo {
+                name: Some(id.to_string()),
+                reasoning: Some(true),
+                tool_call: Some(true),
+                limit: Some(ModelLimit {
+                    context: Some(1_000_000),
+                    output: Some(393_216),
+                    ..Default::default()
+                }),
+                modalities: Some(ModelModalities {
+                    input: Some(vec!["text".to_string()]),
+                    output: Some(vec!["text".to_string()]),
+                }),
+                ..Default::default()
+            },
+        );
+    }
     m
 }
 

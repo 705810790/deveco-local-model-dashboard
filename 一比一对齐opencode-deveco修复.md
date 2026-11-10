@@ -454,3 +454,90 @@ HttpClient 的 HTTP/2 传输层协商头，非业务头）。
 - `原生请求报文对齐.md`：原生报文完整结构、复刻位置、残余差异、再抓包操作手册
 - `captures/`：两轮抓包实证（in-*.json = 原生请求，out-*.json = 代理上游请求）
 
+## 六、🔴 隐藏模型发现（2026-11-10 实测）
+
+> **🔴 重大发现：`deepseek-v4.1-flash` 与 `deepseek-v4.1-flash-1017` 均为上游真实存在的模型**，
+> 但都不在 modelConfig 动态列表中。两个 ID 已加入 `config.rs::extra_maas_models()`
+> 静态合并名单（API 未列出时对外广播）。
+
+实测对比（相同 prompt，经 `/v2/probe` + `/v2/chat/completions`）：
+
+| 项 | deepseek-v4-flash | deepseek-v4.1-flash |
+|---|---|---|
+| 上游可用性 | ✅（在 modelConfig 列表） | ✅（**不在**列表但照常服务） |
+| thinking | 需代理注入（`config.rs` `THINKING_ENABLED_MODELS` 精确匹配） | **不注入也返回 reasoning_content**（疑似默认开启） |
+| token 计量 | 同句 prompt_tokens=10 | 同句 prompt_tokens=36（恒定 +26 偏移，非分词器差异，见第七节复核） |
+| reasoning 长度 | 57 tokens | 168 tokens（更啰嗦） |
+| 自我介绍 | 称"250万token超长上下文" | 无此表述 |
+
+`deepseek-v4.1-flash-1017`（带 -1017 版本 tag）：2026-11-10 实测时 probe/chat 均返回
+403 `ModelServiceRateLimit`（"服务器资源紧张，请稍后重试或配置自定义模型"），~60ms
+快速返回、重试 4 次复现。**用户确认该模型存在，403 为上游繁忙（字面含义），
+非模型 ID 无效**——繁忙模型直接快速拒绝而不进入排队。
+
+## 七、🔴 上游隐藏模型批量探测（2026-11-10）
+
+> **🔴 方法论关键：probe 的 ok=true 不能证明模型存在**——上游对任意未知模型 ID
+> （实测 `totally-fake-model-xyz-123`、`banana-ai` 均通过）会**静默回退到默认模型
+> `deepseek-v4-flash`**。唯一可靠判别法：看非流式响应的 `model` 字段——
+> 未知 ID 被改写为 `deepseek-v4-flash`（回退）；真实模型返回内部版本名或原样 ID；
+> 被识别但繁忙的真实模型直接快速 403（不回退、不排队）。
+
+### 探测结果总表（候选 ~40 个 ID，经 `/v2/chat/completions` 非流式 + resp.model 判别）
+
+> **模型来源标注（用户确认，2026-11-10）**：`GLM-5.1` 与 `GLM-5.3` 来自
+> **DevEco Code**（软件内置）；其余模型（glm-5.2、deepseek 系、Qwen VL 系）
+> 均来自 **DevEco CodeGenie**。两者不重复——GLM-5.1/5.3 为智谱 GLM 族
+> （内部名 `GLM5_1_…`/`GLM_5_3_…`，自称 Z.ai 训练），deepseek-v4.1-flash/
+> -1017 为深度求索 DeepSeek 族（自称深度求索创造），内部名、资源池、
+> 分词计量均不同。
+
+| 判定 | 来源 | 模型 ID | 上游 resp.model / 表现 |
+|---|---|---|---|
+| ✅ 真实 | **DevEco Code** | `GLM-5.1` | `GLM5_1_W4A8_PD-1.0.0`（内部名，W4A8 量化） |
+| ✅ 真实 | **DevEco Code** | `GLM-5.3` | `GLM_5_3_w8a8c8-1.0.0`（内部名，w8a8c8 量化，ptk=19） |
+| ✅ 真实 | DevEco CodeGenie | `deepseek-v4-flash` | 默认回退目标；同句 ptk=10 |
+| ✅ 真实 | DevEco CodeGenie | `glm-5.2` | 探测时 403（繁忙，不回退） |
+| ✅ **真实隐藏** | DevEco CodeGenie | `deepseek-v4.1-flash` | resp.model 原样返回；恒定 +26 token 偏移（上游注入前缀）；独立资源池（它 403 繁忙时 v4-flash 同时正常）；间歇性 403 繁忙（2026-11-10 14:42 实测）；**与 GLM-5.1/5.3 无重复（DeepSeek 族 ≠ GLM 族）** |
+| ✅ **真实隐藏** | DevEco CodeGenie | `deepseek-v4.1-flash-1017` | 稳定快速 403（被识别、繁忙、不回退）；版本 tag 变体 `-1018`/`-1117` 均回退 → 证明 `-1017` 是特殊存在的真实版本；**与 GLM-5.1/5.3 无重复** |
+| ⚠️ 无法用文本探针验证 | DevEco CodeGenie | `Qwen3_VL_235B_A22B_Instruct`、`Qwen2.5-VL-72B` | 纯文本请求回退到 v4-flash；VL 模型需带图请求（vision 路由内部使用，属已知模型） |
+| ❌ 回退假象 | — | `glm-5.4`/`5.5`/`4.6`/`4.5`/`5.2-thinking`/`5.3-thinking`/`GLM-5.1-thinking`、`deepseek-v4.1`/`v4.1-pro`/`v4-pro`/`v4.2-flash`/`v3.2`/`r1`/`v4.1-flash-thinking`、`qwen3-max`/`qwen3-coder-plus`、`kimi-k2`、`gpt-5`、`gemini-3-pro`、`claude-sonnet-4-5`、`minimax-m2`、`doubao-seed-1.6` 等 | resp.model 全部 = `deepseek-v4-flash`（不存在，probe ok=true 纯属回退） |
+
+### 结论
+
+1. 上游 maas 通道**真实开放的文本模型共 6 个**：GLM-5.1、GLM-5.3（来源
+   **DevEco Code**，软件内置）、glm-5.2、deepseek-v4-flash、deepseek-v4.1-flash、
+   deepseek-v4.1-flash-1017（来源 **DevEco CodeGenie**）（+2 个 VL 视觉模型，
+   亦属 CodeGenie）。
+2. 隐藏模型仅 `deepseek-v4.1-flash` 与 `deepseek-v4.1-flash-1017`，均已加入
+   `config.rs::extra_maas_models()` 静态合并名单。**两者均为 DeepSeek 族，
+   与来自 DevEco Code 的 GLM-5.1/GLM-5.3（智谱 GLM 族）无任何重复。**
+3. 上游对未知 ID 的静默回退意味着：**客户端配错模型名不会报错，而是悄悄用上
+   deepseek-v4-flash**——排查"模型行为不对"时先查 resp.model。
+
+### 复核：deepseek-v4.1-flash 是否默认模型？（2026-11-10 分词缩放测试）
+
+用两档长度相同 prompt 对比（非流式，看 ptk 与 resp.model）：
+
+| prompt | deepseek-v4-flash ptk | deepseek-v4.1-flash ptk | Δ |
+|---|---|---|---|
+| 13 字短句 | 10 | 36 | **26** |
+| ~150 字长文 | 77 | 103 | **26** |
+
+Δ 恒定 26 tokens → **不是不同分词器，而是上游为 v4.1-flash 注入 ~26 token
+前缀**（系统提示/模板）。三点证据确认它仍非默认回退路径：
+
+1. 未知 ID 的 resp.model 被改写为 `deepseek-v4-flash`，v4.1-flash 原样回显；
+2. 独立资源池：2026-11-10 14:42 v4.1-flash 403 繁忙、同时刻 v4-flash 正常服务
+   （`-1017` 同样 403，疑为同一部署的版本别名）；
+3. 客户端未注入 thinking 仍返回 reasoning_content（v4-flash 需代理显式注入）。
+
+底层权重是否同源无法从外部证明；对代理而言它是**独立路由、独立资源池**的模型，
+间歇性 403 繁忙属正常现象（与 -1017 同款表现）。
+
+### 附：GLM-5.1 / GLM-5.3 连通性（2026-11-10）
+
+非流式、纯文本流式、tools+流式三种形态均实测通过（tools+流式偶发 40s+
+无首字节后恢复）——外部调用失败为 GLM 池**排队/繁忙**所致，通道本身正常
+（用户确认 GLM 系易排队，不做进一步处理）。
+
